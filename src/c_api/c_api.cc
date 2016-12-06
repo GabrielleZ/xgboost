@@ -191,7 +191,7 @@ struct XGBAPIThreadLocalEntry {
   /*! \brief result holder for returning string pointers */
   std::vector<const char *> ret_vec_charp;
   /*! \brief returning float vector. */
-  std::vector<float> ret_vec_float;
+  std::vector<bst_float> ret_vec_float;
   /*! \brief temp variable of gradient pairs. */
   std::vector<bst_gpair> tmp_gpair;
 };
@@ -207,7 +207,7 @@ int XGDMatrixCreateFromFile(const char *fname,
     LOG(CONSOLE) << "XGBoost distributed mode detected, "
                  << "will split data among workers";
   }
-  *out = new std::shared_ptr<DMatrix>(DMatrix::Load(fname, false, true));
+  *out = new std::shared_ptr<DMatrix>(DMatrix::Load(fname, silent != 0, true));
   API_END();
 }
 
@@ -229,7 +229,7 @@ int XGDMatrixCreateFromDataIter(
 
 XGB_DLL int XGDMatrixCreateFromCSREx(const size_t* indptr,
                                      const unsigned* indices,
-                                     const float* data,
+                                     const bst_float* data,
                                      size_t nindptr,
                                      size_t nelem,
                                      size_t num_col,
@@ -260,7 +260,7 @@ XGB_DLL int XGDMatrixCreateFromCSREx(const size_t* indptr,
 
 XGB_DLL int XGDMatrixCreateFromCSR(const xgboost::bst_ulong* indptr,
                                    const unsigned *indices,
-                                   const float* data,
+                                   const bst_float* data,
                                    xgboost::bst_ulong nindptr,
                                    xgboost::bst_ulong nelem,
                                    DMatrixHandle* out) {
@@ -274,7 +274,7 @@ XGB_DLL int XGDMatrixCreateFromCSR(const xgboost::bst_ulong* indptr,
 
 XGB_DLL int XGDMatrixCreateFromCSCEx(const size_t* col_ptr,
                                      const unsigned* indices,
-                                     const float* data,
+                                     const bst_float* data,
                                      size_t nindptr,
                                      size_t nelem,
                                      size_t num_row,
@@ -282,11 +282,7 @@ XGB_DLL int XGDMatrixCreateFromCSCEx(const size_t* col_ptr,
   std::unique_ptr<data::SimpleCSRSource> source(new data::SimpleCSRSource());
 
   API_BEGIN();
-  int nthread;
-  #pragma omp parallel
-  {
-    nthread = omp_get_num_threads();
-  }
+  const int nthread = omp_get_max_threads();
   data::SimpleCSRSource& mat = *source;
   common::ParallelGroupBuilder<RowBatch::Entry> builder(&mat.row_ptr_, &mat.row_data_);
   builder.InitBudget(0, nthread);
@@ -321,7 +317,7 @@ XGB_DLL int XGDMatrixCreateFromCSCEx(const size_t* col_ptr,
 
 XGB_DLL int XGDMatrixCreateFromCSC(const xgboost::bst_ulong* col_ptr,
                                    const unsigned* indices,
-                                   const float* data,
+                                   const bst_float* data,
                                    xgboost::bst_ulong nindptr,
                                    xgboost::bst_ulong nelem,
                                    DMatrixHandle* out) {
@@ -333,10 +329,10 @@ XGB_DLL int XGDMatrixCreateFromCSC(const xgboost::bst_ulong* col_ptr,
     static_cast<size_t>(nindptr), static_cast<size_t>(nelem), 0, out);
 }
 
-XGB_DLL int XGDMatrixCreateFromMat(const float* data,
+XGB_DLL int XGDMatrixCreateFromMat(const bst_float* data,
                                    xgboost::bst_ulong nrow,
                                    xgboost::bst_ulong ncol,
-                                   float  missing,
+                                   bst_float missing,
                                    DMatrixHandle* out) {
   std::unique_ptr<data::SimpleCSRSource> source(new data::SimpleCSRSource());
 
@@ -428,7 +424,7 @@ XGB_DLL int XGDMatrixSaveBinary(DMatrixHandle handle,
 
 XGB_DLL int XGDMatrixSetFloatInfo(DMatrixHandle handle,
                           const char* field,
-                          const float* info,
+                          const bst_float* info,
                           xgboost::bst_ulong len) {
   API_BEGIN();
   static_cast<std::shared_ptr<DMatrix>*>(handle)
@@ -463,10 +459,10 @@ XGB_DLL int XGDMatrixSetGroup(DMatrixHandle handle,
 XGB_DLL int XGDMatrixGetFloatInfo(const DMatrixHandle handle,
                                   const char* field,
                                   xgboost::bst_ulong* out_len,
-                                  const float** out_dptr) {
+                                  const bst_float** out_dptr) {
   API_BEGIN();
   const MetaInfo& info = static_cast<std::shared_ptr<DMatrix>*>(handle)->get()->info();
-  const std::vector<float>* vec = nullptr;
+  const std::vector<bst_float>* vec = nullptr;
   if (!std::strcmp(field, "label")) {
     vec = &info.labels;
   } else if (!std::strcmp(field, "weight")) {
@@ -556,8 +552,8 @@ XGB_DLL int XGBoosterUpdateOneIter(BoosterHandle handle,
 
 XGB_DLL int XGBoosterBoostOneIter(BoosterHandle handle,
                                   DMatrixHandle dtrain,
-                                  float *grad,
-                                  float *hess,
+                                  bst_float *grad,
+                                  bst_float *hess,
                                   xgboost::bst_ulong len) {
   std::vector<bst_gpair>& tmp_gpair = XGBAPIThreadLocalStore::Get()->tmp_gpair;
   API_BEGIN();
@@ -602,8 +598,8 @@ XGB_DLL int XGBoosterPredict(BoosterHandle handle,
                              int option_mask,
                              unsigned ntree_limit,
                              xgboost::bst_ulong *len,
-                             const float **out_result) {
-  std::vector<float>& preds = XGBAPIThreadLocalStore::Get()->ret_vec_float;
+                             const bst_float **out_result) {
+  std::vector<bst_float>& preds = XGBAPIThreadLocalStore::Get()->ret_vec_float;
   API_BEGIN();
   Booster *bst = static_cast<Booster*>(handle);
   bst->LazyInit();
@@ -662,13 +658,14 @@ inline void XGBoostDumpModelImpl(
     BoosterHandle handle,
     const FeatureMap& fmap,
     int with_stats,
+    const char *format,
     xgboost::bst_ulong* len,
     const char*** out_models) {
   std::vector<std::string>& str_vecs = XGBAPIThreadLocalStore::Get()->ret_vec_str;
   std::vector<const char*>& charp_vecs = XGBAPIThreadLocalStore::Get()->ret_vec_charp;
   Booster *bst = static_cast<Booster*>(handle);
   bst->LazyInit();
-  str_vecs = bst->learner()->Dump2Text(fmap, with_stats != 0);
+  str_vecs = bst->learner()->DumpModel(fmap, with_stats != 0, format);
   charp_vecs.resize(str_vecs.size());
   for (size_t i = 0; i < str_vecs.size(); ++i) {
     charp_vecs[i] = str_vecs[i].c_str();
@@ -681,6 +678,14 @@ XGB_DLL int XGBoosterDumpModel(BoosterHandle handle,
                        int with_stats,
                        xgboost::bst_ulong* len,
                        const char*** out_models) {
+  return XGBoosterDumpModelEx(handle, fmap, with_stats, "text", len, out_models);
+}
+XGB_DLL int XGBoosterDumpModelEx(BoosterHandle handle,
+                       const char* fmap,
+                       int with_stats,
+                       const char *format,
+                       xgboost::bst_ulong* len,
+                       const char*** out_models) {
   API_BEGIN();
   FeatureMap featmap;
   if (strlen(fmap) != 0) {
@@ -689,7 +694,7 @@ XGB_DLL int XGBoosterDumpModel(BoosterHandle handle,
     dmlc::istream is(fs.get());
     featmap.LoadText(is);
   }
-  XGBoostDumpModelImpl(handle, featmap, with_stats, len, out_models);
+  XGBoostDumpModelImpl(handle, featmap, with_stats, format, len, out_models);
   API_END();
 }
 
@@ -700,12 +705,23 @@ XGB_DLL int XGBoosterDumpModelWithFeatures(BoosterHandle handle,
                                    int with_stats,
                                    xgboost::bst_ulong* len,
                                    const char*** out_models) {
+  return XGBoosterDumpModelExWithFeatures(handle, fnum, fname, ftype, with_stats,
+                                   "text", len, out_models);
+}
+XGB_DLL int XGBoosterDumpModelExWithFeatures(BoosterHandle handle,
+                                   int fnum,
+                                   const char** fname,
+                                   const char** ftype,
+                                   int with_stats,
+                                   const char *format,
+                                   xgboost::bst_ulong* len,
+                                   const char*** out_models) {
   API_BEGIN();
   FeatureMap featmap;
   for (int i = 0; i < fnum; ++i) {
     featmap.PushBack(i, fname[i], ftype[i]);
   }
-  XGBoostDumpModelImpl(handle, featmap, with_stats, len, out_models);
+  XGBoostDumpModelImpl(handle, featmap, with_stats, format, len, out_models);
   API_END();
 }
 
